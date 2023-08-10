@@ -1,3 +1,4 @@
+import numpy as np
 from datatorch import get_input, agent, set_output
 from datatorch.api.api import ApiClient
 from datatorch.api.entity.sources.image import Segmentations
@@ -40,6 +41,14 @@ simplify = get_input("simplify")
 
 CONTAINER_NAME = "datatorch-segformer-action"
 
+def valid_image_path():
+    if not image_path.startswith(agent_dir):
+        print(f"Directory must be inside the agent folder ({agent_dir}).")
+        exit(1)
+
+    if not os.path.isfile(image_path):
+        print(f"Image path must be a file ({image_path}).")
+        exit(1)
 
 def return_container_status(container_name: str) -> str:
     """Get the status of a container by it's name
@@ -60,18 +69,7 @@ def return_container_status(container_name: str) -> str:
         container_state = container.attrs["State"]
         return container_state["Status"]
 
-
-def valid_image_path():
-    if not image_path.startswith(agent_dir):
-        print(f"Directory must be inside the agent folder ({agent_dir}).")
-        exit(1)
-
-    if not os.path.isfile(image_path):
-        print(f"Image path must be a file ({image_path}).")
-        exit(1)
-
-
-def start_server(port: int):
+def start_server(port: int) -> None:
     docker_client = docker.from_env()
     # only start server if it image is not up already exist
     if return_container_status(CONTAINER_NAME) != "running":
@@ -80,18 +78,19 @@ def start_server(port: int):
             f"Downloading {image} docker image. This may take a few mins.", flush=True
         )
         container = docker_client.containers.run(
-           image,
-           detach=True,
-           ports={"8000/tcp": port},
-           restart_policy={"Name": "always"},
-           volumes={agent_dir: {"bind": "/agent", "mode": "rw"}},
-           name=CONTAINER_NAME,
+            image,
+            detach=True,
+            ports={"8000/tcp": port},
+            restart_policy={"Name": "always"},
+            volumes={agent_dir: {"bind": "/agent", "mode": "rw"}},
+            name=CONTAINER_NAME,
         )
         if isinstance(container, Model):
             print(f"Created Segformer Container ({container.short_id}).")
     else:
         print(f"Container {CONTAINER_NAME} already running")
         print(f"Sleeping to wait for server bring up")
+    time.sleep(20)
 
 
 def call_model(path: str, points: List[Point], address: str) -> List[List[Point]]:
@@ -103,49 +102,26 @@ def call_model(path: str, points: List[Point], address: str) -> List[List[Point]
     print(f"Container Path = {container_path}")
     print(f"Points = {points}")
 
-    response = requests.post(
-        address, json={"path": container_path, "points": points}
-    )
+    response = requests.post(address, 
+                             json={"path": container_path, "points": points},
+                             timeout=20
+                            )
     response.raise_for_status()
     json = response.json()
-    return json["polygons"]
-
-
-def remove_polygons_with_2_points(path_data: List[List[Point]]):
-    return list(filter(lambda x: len(x) > 2, path_data))
-
-
-def combine_segmentations(
-    path_data_1: List[List[Point]], path_data_2: List[List[Point]]
-) -> List[List[Point]]:
-    poly_1 = [geometry.Polygon(points) for points in path_data_1]
-    poly_2 = [geometry.Polygon(points) for points in path_data_2]
-
-    multi = shapely.ops.unary_union(poly_1 + poly_2)
-
-    path_data = []
-    if isinstance(multi, geometry.Polygon):
-        path_data.append(list(multi.exterior.coords[:-1]))
-
-    if isinstance(multi, geometry.MultiPolygon):
-        for polygon in multi:
-            path_data.append(list(polygon.exterior.coords[:-1]))
-
-    return path_data
+    return json["masks"]
 
 
 def send_request(annotation_id=None):
     attempts = 0
 
     start_server(address.port or 80)
-    time.sleep(30)
 
     while True:
         try:
             attempts += 1
             print(f"Attempt {attempts}: Request to Segformer Server")
             masks = call_model(image_path, points, address.geturl())
-            print(len(masks))
+            masks = np.array(masks, dtype=np.uint8)
             for mask in masks:
                 # Create a segments object
                 # use a from_masks method
@@ -158,11 +134,11 @@ def send_request(annotation_id=None):
                         s.save(ApiClient())
                     except StopIteration:
                         if annotation_id is not None:
-                           print(
-                               f"Creating segmentation source for annotation {annotation_id}"
-                           )
-                           s.path_data = output_seg  # type: ignore
-                           s.create(ApiClient())
+                            print(
+                                f"Creating segmentation source for annotation {annotation_id}"
+                            )
+                            s.path_data = output_seg  # type: ignore
+                            s.create(ApiClient())
                 else:
                     s.create_new_annotation(label_id, file_id)
             exit(0)
@@ -173,7 +149,6 @@ def send_request(annotation_id=None):
             if attempts > 5:
                 break
             start_server(address.port or 80)
-            time.sleep(20)
         except Exception as ex:
             print("Exception", ex, flush=True)
             break
