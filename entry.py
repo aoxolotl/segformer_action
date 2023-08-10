@@ -1,6 +1,5 @@
 from datatorch import get_input, agent, set_output
 from datatorch.api.api import ApiClient
-from datatorch.api.entity.annotation import Annotation
 from datatorch.api.entity.sources.image import Segmentations
 from datatorch.api.entity.sources.source import Source
 
@@ -145,44 +144,17 @@ def send_request(annotation_id=None):
         try:
             attempts += 1
             print(f"Attempt {attempts}: Request to Segformer Server")
-            segments = call_model(image_path, points, address.geturl())
-            print(len(segments))
-            for seg in segments:
-                if simplify == 0:
-                    input_seg = seg
-                else:
-                    input_seg = [
-                        simplify_points(
-                            polygon, tolerance=simplify, highestQuality=False
-                        )
-                        for polygon in seg
-                    ]
-
-                output_seg = remove_polygons_with_2_points(input_seg)
-                set_output("polygons", output_seg)
-                print(f"Annotation ID: {annotation_id}")
+            masks = call_model(image_path, points, address.geturl())
+            print(len(masks))
+            for mask in masks:
+                # Create a segments object
+                # use a from_masks method
+                s = Segmentations()
+                s.from_mask(mask, simplify)
 
                 if annotation:
                     try:
-                        s = Segmentations()
-                        s.annotation_id = annotation_id
-
-                        existing_segmentation = next(
-                            x
-                            for x in annotation.get("sources")
-                            if x.get("type") == "PaperSegmentations"
-                        )
-                        print(
-                            f"Updating segmentation for annotation {annotation_id}",
-                            flush=True,
-                        )
-                        s.id = existing_segmentation.get("id")
-                        s.path_data = combine_segmentations(
-                            output_seg,
-                            remove_polygons_with_2_points(
-                                existing_segmentation.get("pathData")
-                            ),
-                        )
+                        s.combine_segmentations(annotation)
                         s.save(ApiClient())
                     except StopIteration:
                         if annotation_id is not None:
@@ -192,22 +164,9 @@ def send_request(annotation_id=None):
                            s.path_data = output_seg  # type: ignore
                            s.create(ApiClient())
                 else:
-                    new_annotation = Annotation()
-                    new_annotation.label_id = label_id
-                    new_annotation.file_id = file_id
-                    new_annotation.create(ApiClient())
-                    annotation_id = new_annotation.id
-                    print(f"Creating segmentation for annotation {annotation_id}")
-
-                    s = Segmentations()
-                    s.annotation_id = annotation_id
-                    s.path_data = output_seg
-                    s.create(ApiClient())
-                    print("Segmentation created")
-
-                    # exit(0)
-
+                    s.create_new_annotation(label_id, file_id)
             exit(0)
+
         except HTTPError as http_err:
             print(http_err)
             print(f"Attempt {attempts}: Could not connect to model.")
