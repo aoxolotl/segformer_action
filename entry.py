@@ -1,22 +1,18 @@
-import numpy as np
-from datatorch import get_input, agent, set_output
-from datatorch.api.api import ApiClient
-from datatorch.api.entity.sources.image import Segmentations
-from datatorch.api.entity.sources.source import Source
-
-from datatorch.api.scripts.utils.simplify import simplify_points
-
-import requests
-from requests.exceptions import HTTPError
-import docker
-import time
 import os
-import shapely.ops
+import time
+import requests
+import docker
+from requests.exceptions import HTTPError
 
+import numpy as np
+import shapely.ops
+from urllib.parse import urlparse
 from shapely import geometry
 from typing import List, Tuple
 from docker.models.resource import Model
-from urllib.parse import urlparse
+
+from datatorch import get_input, agent, set_output
+from datatorch.api.entity.sources.image import Segmentations
 
 Point = Tuple[float, float]
 
@@ -123,24 +119,15 @@ def send_request(annotation_id=None):
             masks = call_model(image_path, points, address.geturl())
             masks = np.array(masks, dtype=np.uint8)
             for mask in masks:
-                # Create a segments object
-                # use a from_masks method
+                # Create a segmentation object
                 s = Segmentations()
-                s.from_mask(mask, simplify)
 
-                if annotation:
-                    try:
-                        s.combine_segmentations(annotation)
-                        s.save(ApiClient())
-                    except StopIteration:
-                        if annotation_id is not None:
-                            print(
-                                f"Creating segmentation source for annotation {annotation_id}"
-                            )
-                            s.path_data = output_seg  # type: ignore
-                            s.create(ApiClient())
-                else:
-                    s.create_new_annotation(label_id, file_id)
+                # use a from_masks method
+                # handles merging or creating annotations internally
+                s.create_segmentation_from_mask(mask, simplify, 
+                                                annotation,
+                                                label_id, file_id)
+
             exit(0)
 
         except HTTPError as http_err:
